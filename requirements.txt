@@ -1,0 +1,5 @@
+# OPSIGHT - ICS operator behavior monitoring
+# Python 3.11+
+
+SQLAlchemy>=2.0,<3
+psycopg2-binary>=2.9

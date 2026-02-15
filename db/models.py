@@ -5,6 +5,7 @@ SQLAlchemy 2.0 declarative models for ICS operator behavior monitoring.
 
 from datetime import date, datetime, time
 from sqlalchemy import func
+from sqlalchemy import String
 
 from sqlalchemy import (
      Boolean,
@@ -112,8 +113,8 @@ class Operators(Base):
 
     __tablename__ = "Operators"
 
-    Operator_ID: Mapped[int] = mapped_column(
-        Integer, primary_key=True, autoincrement=True
+    Operator_ID: Mapped[str] = mapped_column(
+        String(10), primary_key=True
     )
     Crew_ID: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("crews.Crew_ID"), nullable=True
@@ -134,7 +135,7 @@ class Operators(Base):
         "Sessions", back_populates="operator"
     )
     events: Mapped[list["Events"]] = relationship(
-        "Events", back_populates="operator", foreign_keys="Events.operator_id"
+        "Events", back_populates="operator", foreign_keys="Events.Operator_ID"
     )
     baseline_profiles: Mapped[list["Baseline_Profiles"]] = relationship(
         "Baseline_Profiles", back_populates="operator"
@@ -209,8 +210,8 @@ class Sessions(Base):
         ForeignKey("shift_instances.shift_instance_id"),
         nullable=True,
     )
-    Operator_ID: Mapped[int] = mapped_column(
-        Integer, ForeignKey("Operators.Operator_ID"), nullable=False
+    Operator_ID: Mapped[str] = mapped_column(
+        String(10), ForeignKey("Operators.Operator_ID"), nullable=False
     )
     Shift_ID: Mapped[int] = mapped_column(
         Integer, ForeignKey("shift_definitions.shift_id"), nullable=False
@@ -253,7 +254,7 @@ class Events(Base):
     __tablename__ = "Events"
     __table_args__ = (
     Index("ix_events_session_time", "Session_ID", "Timestamp"),
-    Index("ix_events_operator_time", "operator_id", "Timestamp"),
+    Index("ix_events_operator_time", "Operator_ID", "Timestamp"),
     Index("ix_events_address_fc", "Address", "FunctionCode"),
 )
 
@@ -263,8 +264,8 @@ class Events(Base):
     Session_ID: Mapped[int] = mapped_column(
         Integer, ForeignKey("Sessions.Session_ID"), nullable=False
     )
-    Operator_ID: Mapped[int] = mapped_column(
-    Integer, ForeignKey("Operators.Operator_ID"), nullable=False
+    Operator_ID: Mapped[str] = mapped_column(
+    String(10), ForeignKey("Operators.Operator_ID"), nullable=False
 )
     Timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     TimeInterval: Mapped[float] = mapped_column(Float, nullable=False)
@@ -272,7 +273,7 @@ class Events(Base):
     FunctionCode: Mapped[str] = mapped_column(String(10), nullable=False)
     CommandResponse: Mapped[str] = mapped_column(String(20), nullable=False)
     ControlMode: Mapped[str] = mapped_column(String(20), nullable=False)
-    ControlScheme: Mapped[str] = mapped_column(String(20), nullable=False)
+    ControlScheme: Mapped[str] = mapped_column(String(50), nullable=False)
     CRC: Mapped[int] = mapped_column(Integer, nullable=False)
     DataLength: Mapped[int] = mapped_column(Integer, nullable=False)
     InvalidFunctionCode: Mapped[str] = mapped_column(String(5), nullable=False)
@@ -365,8 +366,8 @@ class Baseline_Profiles(Base):
     Baseline_ID: Mapped[int] = mapped_column(
         Integer, primary_key=True, autoincrement=True
     )
-    Operator_ID: Mapped[int] = mapped_column(
-        Integer, ForeignKey("Operators.Operator_ID"), nullable=False
+    Operator_ID: Mapped[str] = mapped_column(
+        String(10), ForeignKey("Operators.Operator_ID"), nullable=False
     )
     Shift_ID: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("shift_definitions.shift_id"), nullable=True
@@ -474,7 +475,7 @@ class Alerts(Base):
     "Alert_CTI_Links", back_populates="alert", cascade="all, delete-orphan"
     )
     detection: Mapped["Detection"] = relationship(
-    "Detection", back_populates="alerts", foreign_keys=[Detection_ID], cascade="all, delete-orphan"
+    "Detection", back_populates="alerts", foreign_keys=[Detection_ID]
     )
 
 

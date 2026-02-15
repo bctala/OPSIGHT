@@ -3,11 +3,14 @@ OPSIGHT database configuration.
 Provides SQLAlchemy 2.0 engine, declarative Base, and session factory (Alembic-friendly).
 """
 
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
-
-# Default PostgreSQL URL; override via environment (e.g. DATABASE_URL) in production.
-DATABASE_URL = "postgresql://localhost/opsight"
+# Default PostgreSQL URL; override with DATABASE_URL environment variable.
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg2://postgres:YOURPASS@localhost:5432/opsight"
+)
 
 engine = create_engine(
     DATABASE_URL,

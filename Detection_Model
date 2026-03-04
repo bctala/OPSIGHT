@@ -1,0 +1,226 @@
+import pandas as pd
+import numpy as np
+from scipy.stats import poisson, entropy
+
+# NOTE: This code doesn't include the HMM  
+# -------------------------------------------------
+# PATHS
+# -------------------------------------------------
+
+DATA_PATH = "sanitized_datasetL.csv"
+BASELINE_PATH = "operator_baselines.csv"
+OUTPUT_PATH = "opsight_detection_results.csv"
+
+
+# -------------------------------------------------
+# LOAD DATA
+# -------------------------------------------------
+
+df = pd.read_csv(DATA_PATH)
+baselines = pd.read_csv(BASELINE_PATH)
+
+# Clean column names
+df.columns = df.columns.str.strip()
+baselines.columns = baselines.columns.str.strip()
+
+# Ensure OperatorID format is identical
+df["OperatorID"] = df["OperatorID"].astype(str).str.strip()
+baselines["OperatorID"] = baselines["OperatorID"].astype(str).str.strip()
+
+# Convert timestamps
+df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+
+# Sort data
+df = df.sort_values(["OperatorID", "Shift", "Timestamp"])
+
+# Baseline dictionary
+baseline_map = baselines.set_index("OperatorID").to_dict("index")
+
+
+# -------------------------------------------------
+# HELPER FUNCTIONS
+# -------------------------------------------------
+
+def z_score(x, mu, sigma):
+    if sigma == 0 or np.isnan(sigma):
+        return 0.0
+    return abs((x - mu) / sigma)
+
+
+def poisson_score(x, lam):
+    if lam == 0 or np.isnan(lam):
+        return 0.0
+    return poisson.sf(x, lam)
+
+
+def state_change_rate(series):
+    return max((series != series.shift()).sum() - 1, 0)
+
+
+def shannon_entropy(series):
+    p = series.value_counts(normalize=True)
+    if len(p) == 0:
+        return 0
+    return entropy(p)
+
+
+def binomial_z(p_obs, p0, n):
+    if n == 0:
+        return 0
+    sigma = np.sqrt(p0 * (1 - p0) / n)
+    if sigma == 0:
+        return 0
+    return abs((p_obs - p0) / sigma)
+
+
+# -------------------------------------------------
+# DETECTION ENGINE
+# -------------------------------------------------
+
+detections = []
+
+groups = df.groupby(["OperatorID", "Shift"])
+
+print("Number of groups:", groups.ngroups)
+
+for (operator, shift), s in groups:
+
+    # Skip operators without baselines
+    if operator not in baseline_map:
+        continue
+
+    if len(s) < 2:
+        continue
+
+    base = baseline_map[operator]
+
+    n = len(s)
+
+    # -------------------------------------------------
+    # FEATURE COMPUTATION
+    # -------------------------------------------------
+
+    # Command Frequency
+    total_time = s["TimeInterval"].sum()
+    command_frequency = n / total_time if total_time > 0 else 0
+
+    # Inter Command Timing
+    inter_mean = s["TimeInterval"].mean()
+    inter_std = s["TimeInterval"].std()
+
+    # Control Mode Changes
+    control_mode_rate = state_change_rate(s["ControlMode"])
+
+    # Pump State Changes
+    pump_state_rate = state_change_rate(s["PumpState"])
+
+    # High Risk Command Ratio
+    high_risk_ratio = (s["FunctionCode"] == 16).mean()
+
+    # Invalid Command Rate
+    invalid_command_rate = (
+        (s["InvalidFunctionCode"] == 1) |
+        (s["InvalidDataLength"] == 1)
+    ).mean()
+
+    # Setpoint Change Rate
+    setpoint_change_rate = s["deltaSetPoint"].abs().mean()
+
+    # PID Modification Rate
+    pid_cols = [c for c in s.columns if c.startswith("deltaPID")]
+
+    if pid_cols:
+        pid_values = s[pid_cols].apply(pd.to_numeric, errors="coerce")
+        pid_mod_rate = pid_values.abs().sum().sum() / n
+    else:
+        pid_mod_rate = 0
+
+    # Command Burst Rate
+    burst_rate = (s["TimeInterval"] < 1).sum()
+
+    # Command Entropy
+    if "Address" in s.columns:
+        combo = s["FunctionCode"].astype(str) + "_" + s["Address"].astype(str)
+        command_entropy = shannon_entropy(combo)
+    else:
+        command_entropy = shannon_entropy(s["FunctionCode"])
+
+    # Time From Last Similar Operation
+    s["time_since_last"] = s.groupby("FunctionCode")["Timestamp"].diff().dt.total_seconds()
+    waiting_time = s["time_since_last"].mean()
+
+    # Process Command Correlation
+    corr = s["SetPoint"].corr(s["PipelinePSI"])
+    if np.isnan(corr):
+        corr = base["Process_Corr"]
+
+    corr_drop = max(base["Process_Corr"] - corr, 0)
+
+    # -------------------------------------------------
+    # DETECTION MODELS
+    # -------------------------------------------------
+
+    scores = []
+
+    scores.append(poisson_score(command_frequency, base["CF_lambda"]))
+
+    scores.append(z_score(inter_mean, base["IC_mean_mu"], base["IC_mean_sigma"]))
+
+    scores.append(z_score(inter_std, base["IC_std_mu"], base["IC_std_sigma"]))
+
+    scores.append(poisson_score(control_mode_rate, base["CMCR_lambda"]))
+
+    scores.append(binomial_z(high_risk_ratio, base["HighRisk_ratio"], n))
+
+    scores.append(binomial_z(invalid_command_rate, base["Invalid_ratio"], n))
+
+    scores.append(poisson_score(pump_state_rate, base["PSCR_lambda"]))
+
+    scores.append(z_score(setpoint_change_rate, base["SP_mu"], base["SP_sigma"]))
+
+    scores.append(poisson_score(pid_mod_rate, base["PID_lambda"]))
+
+    scores.append(poisson_score(burst_rate, base["CBR_lambda"]))
+
+    scores.append(z_score(command_entropy, base["ENT_mu"], base["ENT_sigma"]))
+
+    scores.append(z_score(waiting_time, base["Replay_mu"], base["Replay_sigma"]))
+
+    scores.append(corr_drop)
+
+    # -------------------------------------------------
+    # AGGREGATION
+    # -------------------------------------------------
+
+    total_anomaly_score = sum(scores)
+
+    detected_anomaly = total_anomaly_score > 10
+
+    detections.append({
+        "OperatorID": operator,
+        "Shift": shift,
+        "Rows": n,
+        "Anomaly_Score": round(total_anomaly_score, 4),
+        "Detected_Anomaly": detected_anomaly,
+        "True_Label": s["Label"].iloc[0]
+    })
+
+
+# -------------------------------------------------
+# SAVE RESULTS
+# -------------------------------------------------
+
+results = pd.DataFrame(detections)
+
+results.to_csv(OUTPUT_PATH, index=False)
+
+print("\nDetection Engine executed successfully")
+print("Saved to:", OUTPUT_PATH)
+
+print("\nResults Preview:")
+print(results.head())
+
+if len(results) > 0:
+    print("\nDetection Rate:", results["Detected_Anomaly"].mean())
+else:
+    print("\nNo detection windows produced.")
